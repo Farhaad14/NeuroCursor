@@ -2,10 +2,13 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import pyautogui
+import time
+import sys
 
 pyautogui.FAILSAFE = False
-import time
 
+
+# MEDIAPIPE SETUP
 
 
 BaseOptions = mp.tasks.BaseOptions
@@ -21,98 +24,49 @@ options = FaceLandmarkerOptions(
 
 landmarker = FaceLandmarker.create_from_options(options)
 
+
+# CAMERA + SCREEN
+
+
 cap = cv2.VideoCapture(0)
 
 screen_w, screen_h = pyautogui.size()
 
-# ========================
-# FULL CAMERA CALIBRATION
-# ========================
-
-cv2.namedWindow("Calibration", cv2.WINDOW_NORMAL)
-cv2.setWindowProperty("Calibration", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
 ret, frame = cap.read()
 cam_h, cam_w, _ = frame.shape
 
-margin_x = int(cam_w * 0.03)
-margin_y = int(cam_h * 0.04)
 
-calibration_points = [
-    (margin_x, margin_y),                         # top-left
-    (cam_w - margin_x, margin_y),                 # top-right
-    (margin_x, cam_h - margin_y),                 # bottom-left
-    (cam_w - margin_x, cam_h - margin_y)          # bottom-right
-]
 
-calibration_data = []
+# GLOBAL QUIT FUNCTION
 
-for point in calibration_points:
 
-    captured = False
-
-    while not captured:
-        ret, frame = cap.read()
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = landmarker.detect_for_video(mp_image, int(time.time()*1000))
-
-        # Draw calibration dot ON CAMERA FRAME
-        cv2.circle(frame, point, 10, (0,0,255), -1)
-
-        cv2.putText(frame,
-                    "Look at dot & press SPACE | ESC to quit",
-                    (30,50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255,255,255),
-                    2)
-
-        cv2.imshow("Calibration", frame)
-
-        if result.face_landmarks:
-            landmarks = result.face_landmarks[0]
-            left_iris = landmarks[468]
-            right_iris = landmarks[473]
-
-            center_x = (left_iris.x + right_iris.x) / 2
-            center_y = (left_iris.y + right_iris.y) / 2
-
-        key = cv2.waitKey(1)
-
-        if key == 27:  # ESC
-            cap.release()
-            cv2.destroyAllWindows()
-            exit()
-
-        if key == 32:  # SPACE
-            calibration_data.append((center_x, center_y))
-            captured = True
-
-cv2.destroyWindow("Calibration")
-print("Calibration Complete!")
-
-# Get boundaries
-xs = [p[0] for p in calibration_data]
-ys = [p[1] for p in calibration_data]
-
-min_x, max_x = min(xs), max(xs)
-min_y, max_y = min(ys), max(ys)
-
-print("Calibration Complete!")
+def quit_program():
+    print("Program stopped")
+    cap.release()
+    cv2.destroyAllWindows()
+    sys.exit()
 
 
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+# GET EYE CENTER
+
+
+def get_eye_center(frame):
 
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    result = landmarker.detect_for_video(mp_image, int(time.time()*1000))
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb
+    )
+
+    result = landmarker.detect_for_video(
+        mp_image,
+        int(time.time() * 1000)
+    )
 
     if result.face_landmarks:
+
         landmarks = result.face_landmarks[0]
 
         left_iris = landmarks[468]
@@ -121,21 +75,143 @@ while True:
         center_x = (left_iris.x + right_iris.x) / 2
         center_y = (left_iris.y + right_iris.y) / 2
 
-        # Normalize
+        return center_x, center_y
+
+    return None
+
+
+
+# CALIBRATION
+
+
+def run_calibration():
+
+    cv2.namedWindow("Calibration", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(
+        "Calibration",
+        cv2.WND_PROP_FULLSCREEN,
+        cv2.WINDOW_FULLSCREEN
+    )
+
+    margin_x = int(cam_w * 0.03)
+    margin_y = int(cam_h * 0.04)
+
+    calibration_points = [
+        (margin_x, margin_y),
+        (cam_w - margin_x, margin_y),
+        (margin_x, cam_h - margin_y),
+        (cam_w - margin_x, cam_h - margin_y)
+    ]
+
+    calibration_data = []
+
+    for point in calibration_points:
+
+        captured = False
+
+        while not captured:
+
+            ret, frame = cap.read()
+
+            eye = get_eye_center(frame)
+
+            # UI canvas
+            ui = np.ones((cam_h, cam_w, 3), dtype=np.uint8) * 255
+
+            # dot
+            cv2.circle(ui, point, 8, (0,0,255), -1)
+
+            # text
+            text = "Look at dot and press SPACE"
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale = 0.9
+            thickness = 2
+
+            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+
+            cv2.putText(
+                ui,
+                text,
+                ((cam_w - tw) // 2, int(cam_h * 0.1)),
+                font,
+                scale,
+                (0,0,0),
+                thickness
+            )
+
+            cv2.imshow("Calibration", ui)
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == 27 or key == ord('q'):
+                quit_program()
+
+            if key == 32 and eye is not None:
+
+                calibration_data.append(eye)
+                captured = True
+
+    cv2.destroyWindow("Calibration")
+
+    xs = [p[0] for p in calibration_data]
+    ys = [p[1] for p in calibration_data]
+
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+
+# RUN CALIBRATION
+
+
+print("Starting calibration...")
+
+min_x, max_x, min_y, max_y = run_calibration()
+
+print("Calibration complete")
+
+
+
+# CURSOR SMOOTHING
+
+
+smooth_x = 0
+smooth_y = 0
+alpha = 0.1
+
+
+
+# MAIN LOOP
+
+
+while True:
+
+    ret, frame = cap.read()
+
+    if not ret:
+        break
+
+    eye = get_eye_center(frame)
+
+    if eye is not None:
+
+        center_x, center_y = eye
+
         norm_x = (center_x - min_x) / (max_x - min_x)
         norm_y = (center_y - min_y) / (max_y - min_y)
+
         norm_x = 1 - norm_x
-        
 
         screen_x = int(norm_x * screen_w)
         screen_y = int(norm_y * screen_h)
 
-        print("Mapped:", screen_x, screen_y)
+        # smoothing
+        smooth_x = smooth_x + alpha * (screen_x - smooth_x)
+        smooth_y = smooth_y + alpha * (screen_y - smooth_y)
 
-        pyautogui.moveTo(screen_x, screen_y)
+        pyautogui.moveTo(int(smooth_x), int(smooth_y))
 
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
+    key = cv2.waitKey(1) & 0xFF
 
-cap.release()
-cv2.destroyAllWindows()
+    if key == 27 or key == ord('q'):
+        quit_program()
